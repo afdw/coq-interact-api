@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Any, Literal, Self, Type, cast
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Iterable
 from pydantic import BaseModel, ConfigDict, model_validator, ValidationInfo, ValidatorFunctionWrapHandler, model_serializer, TypeAdapter
 import json
 import traceback
@@ -49,8 +49,11 @@ class External[A](BaseModel):
     @model_validator(mode="wrap")
     @classmethod
     def validate_model(cls, obj: Any, _handler: ValidatorFunctionWrapHandler, _info: ValidationInfo) -> Self:
-        repr = ExternalRepr[A].model_validate(obj)
-        return cls.model_construct(v=external_map[repr.external_id])
+        if isinstance(obj, cls):
+            return obj
+        else:
+            repr = ExternalRepr[A].model_validate(obj)
+            return cls.model_construct(v=external_map[repr.external_id])
 
 
 class Tactic[A]:
@@ -65,6 +68,17 @@ class LocalRequestBase[R: BaseModel](BaseModel):
     def result_type(self) -> Type[R]:
         return cast(Type[R], self._result_type)
 
+    @model_validator(mode="wrap")
+    @classmethod
+    def validate_model(cls, obj: Any, handler: ValidatorFunctionWrapHandler, _info: ValidationInfo) -> Self:
+        obj_copy = {}
+        for key, value in dict(obj).items():
+            if isinstance(value, Internal):
+                obj_copy[key] = dict(value)  # type: ignore
+            else:
+                obj_copy[key] = value
+        return handler(obj_copy)
+
 
 class LocalRequestUnit(LocalRequestBase[Internal[None]]):
     type: Literal["LocalRequestUnit"] = "LocalRequestUnit"
@@ -77,11 +91,25 @@ class LocalRequestTacticReturn[A](LocalRequestBase[Internal[Tactic[A]]]):
     value: Internal[A]
 
 
-class LocalRequestTacticBind[A, B](LocalRequestBase[Internal[Tactic[A]]]):
+class LocalRequestTacticBind[A, B](LocalRequestBase[Internal[Tactic[B]]]):
     type: Literal["LocalRequestTacticBind"] = "LocalRequestTacticBind"
     _result_type: Type[BaseModel] = Internal[Tactic[object]]
     tac: Internal[Tactic[A]]
     f: External[Callable[[Internal[A]], Coroutine[None, None, Internal[Tactic[B]]]]]
+
+
+class LocalRequestTacticThen[A](LocalRequestBase[Internal[Tactic[A]]]):
+    type: Literal["LocalRequestTacticThen"] = "LocalRequestTacticThen"
+    _result_type: Type[BaseModel] = Internal[Tactic[object]]
+    tac_1: Internal[Tactic[None]]
+    tac_2: Internal[Tactic[A]]
+
+
+class LocalRequestTacticOr[A](LocalRequestBase[Internal[Tactic[A]]]):
+    type: Literal["LocalRequestTacticOr"] = "LocalRequestTacticOr"
+    _result_type: Type[BaseModel] = Internal[Tactic[object]]
+    tac_1: Internal[Tactic[A]]
+    tac_2: Internal[Tactic[A]]
 
 
 class LocalRequestTacticMessage(LocalRequestBase[Internal[Tactic[None]]]):
@@ -90,7 +118,14 @@ class LocalRequestTacticMessage(LocalRequestBase[Internal[Tactic[None]]]):
     msg: str
 
 
-type LocalRequest = LocalRequestUnit | LocalRequestTacticReturn[object] | LocalRequestTacticBind[object, object] | LocalRequestTacticMessage
+type LocalRequest = (
+    LocalRequestUnit
+    | LocalRequestTacticReturn[object]
+    | LocalRequestTacticBind[object, object]
+    | LocalRequestTacticThen[object]
+    | LocalRequestTacticOr[object]
+    | LocalRequestTacticMessage
+)
 
 
 class RemoteRequestBase[R: BaseModel](BaseModel):
@@ -126,18 +161,42 @@ class Handler:
         return await self.handle_local_request(LocalRequestUnit.model_construct())
 
     async def tactic_return[A](self, value: Internal[A]) -> Internal[Tactic[A]]:
-        return await self.handle_local_request(LocalRequestTacticReturn[A].model_construct(value=value))
+        return await self.handle_local_request(LocalRequestTacticReturn[A](value=value))
 
-    async def tactic_bind[A, B](self, tac: Internal[Tactic[A]], f: Callable[[Internal[A]], Coroutine[None, None, Internal[Tactic[B]]]]) -> Internal[Tactic[A]]:
+    async def tactic_fail[A](self, exn: Exception) -> Internal[Tactic[A]]:  # type: ignore
+        async def k(_: Internal[None]) -> Internal[Tactic[A]]:
+            raise exn
+
+        return await self.tactic_bind(await self.tactic_return(await self.unit()), k)
+
+    async def tactic_bind[A, B](self, tac: Internal[Tactic[A]], f: Callable[[Internal[A]], Coroutine[None, None, Internal[Tactic[B]]]]) -> Internal[Tactic[B]]:
         return await self.handle_local_request(
-            LocalRequestTacticBind[A, B].model_construct(
+            LocalRequestTacticBind[A, B](
                 tac=tac,
                 f=External[Callable[[Internal[A]], Coroutine[None, None, Internal[Tactic[B]]]]].model_construct(v=f),
             )
         )
 
+    async def tactic_then[A](self, tac_1: Internal[Tactic[None]], tac_2: Internal[Tactic[A]]) -> Internal[Tactic[A]]:
+        return await self.handle_local_request(LocalRequestTacticThen(tac_1=tac_1, tac_2=tac_2))
+
+    async def tactic_then_list(self, tacs: Iterable[Internal[Tactic[None]]]) -> Internal[Tactic[None]]:
+        tac_result = await self.tactic_return(await self.unit())
+        for tac in reversed(list(tacs)):
+            tac_result = await self.tactic_then(tac, tac_result)
+        return tac_result
+
+    async def tactic_or[A](self, tac_1: Internal[Tactic[A]], tac_2: Internal[Tactic[A]]) -> Internal[Tactic[A]]:
+        return await self.handle_local_request(LocalRequestTacticOr(tac_1=tac_1, tac_2=tac_2))
+
+    async def tactic_or_list[A](self, tacs: Iterable[Internal[Tactic[A]]]) -> Internal[Tactic[A]]:
+        tac_result: Internal[Tactic[A]] = await self.tactic_fail(RuntimeError("No tactic"))
+        for tac in reversed(list(tacs)):
+            tac_result = await self.tactic_or(tac, tac_result)
+        return tac_result
+
     async def tactic_message(self, msg: str) -> Internal[Tactic[None]]:
-        return await self.handle_local_request(LocalRequestTacticMessage.model_construct(msg=msg))
+        return await self.handle_local_request(LocalRequestTacticMessage(msg=msg))
 
 
 async def handle_websocket(websocket: WebSocket, get_tactic: Callable[[Handler], Coroutine[None, None, Internal[Tactic[None]]]]) -> None:

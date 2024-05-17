@@ -44,7 +44,7 @@ async def websocket_interact_bind(websocket: WebSocket) -> None:
         ```
         """
 
-        async def k(_: Internal[None]):
+        async def k(_: Internal[None]) -> Internal[Tactic[None]]:
             print("interact")
             return await handler.tactic_return(await handler.unit())
 
