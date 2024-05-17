@@ -1,0 +1,36 @@
+[tool.poetry]
+name = "coq-interact-api"
+version = "0.1.0"
+description = "API for interacting with a Coq tactic for interaction with external programs"
+authors = ["Anton Danilkin"]
+readme = "README.md"
+packages = [
+    { include = "coq_interact_api" },
+    { include = "coq_interact_api_examples" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+pydantic = "^2.7.1"
+starlette = "^0.37.2"
+
+[tool.poetry.group.examples.dependencies]
+fastapi = "^0.111.0"
+uvicorn = {extras = ["standard"], version = "^0.29.0"}
+
+[tool.poetry.group.dev.dependencies]
+pyright = "^1.1.358"
+ruff = "^0.3.5"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pyright]
+exclude = ["**/__pycache__", ".venv", "old"]
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+
+[tool.ruff]
+line-length = 160
