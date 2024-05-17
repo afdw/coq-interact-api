@@ -84,7 +84,13 @@ class LocalRequestTacticBind[A, B](LocalRequestBase[Internal[Tactic[A]]]):
     f: External[Callable[[Internal[A]], Coroutine[None, None, Internal[Tactic[B]]]]]
 
 
-type LocalRequest = LocalRequestUnit | LocalRequestTacticReturn[object] | LocalRequestTacticBind[object, object]
+class LocalRequestTacticMessage(LocalRequestBase[Internal[Tactic[None]]]):
+    type: Literal["LocalRequestTacticMessage"] = "LocalRequestTacticMessage"
+    _result_type: Type[BaseModel] = Internal[Tactic[object]]
+    msg: str
+
+
+type LocalRequest = LocalRequestUnit | LocalRequestTacticReturn[object] | LocalRequestTacticBind[object, object] | LocalRequestTacticMessage
 
 
 class RemoteRequestBase[R: BaseModel](BaseModel):
@@ -130,6 +136,9 @@ class Handler:
             )
         )
 
+    async def tactic_message(self, msg: str) -> Internal[Tactic[None]]:
+        return await self.handle_local_request(LocalRequestTacticMessage.model_construct(msg=msg))
+
 
 async def handle_websocket(websocket: WebSocket, get_tactic: Callable[[Handler], Coroutine[None, None, Internal[Tactic[None]]]]) -> None:
     class HandlerImpl(Handler):
@@ -162,7 +171,7 @@ async def handle_websocket(websocket: WebSocket, get_tactic: Callable[[Handler],
                         raise TypeError("Invalid message: " + s)
 
             return await aux()
-        
+
         async def handle_remote(self, t: str) -> None:
             try:
                 remote_request: RemoteRequest = TypeAdapter(RemoteRequest).validate_json(t)

@@ -53,6 +53,16 @@ async def websocket_interact_bind(websocket: WebSocket) -> None:
     await coq_interact_api.handle_websocket(websocket, get_tactic)
 
 
+@app.websocket("/interact_message")
+async def websocket_interact_message(websocket: WebSocket) -> None:
+    await websocket.accept()
+
+    async def get_tactic(handler: Handler) -> Internal[Tactic[None]]:
+        return await handler.tactic_message("interact")
+
+    await coq_interact_api.handle_websocket(websocket, get_tactic)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the server.")
     parser.add_argument("-a", "--addr", type=str, default="0.0.0.0")
