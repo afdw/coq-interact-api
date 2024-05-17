@@ -118,6 +118,12 @@ class LocalRequestTacticMessage(LocalRequestBase[Internal[Tactic[None]]]):
     msg: str
 
 
+class LocalRequestTacticLtac(LocalRequestBase[Internal[Tactic[None]]]):
+    type: Literal["LocalRequestTacticLtac"] = "LocalRequestTacticLtac"
+    _result_type: Type[BaseModel] = Internal[Tactic[object]]
+    tactic: str
+
+
 type LocalRequest = (
     LocalRequestUnit
     | LocalRequestTacticReturn[object]
@@ -125,6 +131,7 @@ type LocalRequest = (
     | LocalRequestTacticThen[object]
     | LocalRequestTacticOr[object]
     | LocalRequestTacticMessage
+    | LocalRequestTacticLtac
 )
 
 
@@ -197,6 +204,9 @@ class Handler:
 
     async def tactic_message(self, msg: str) -> Internal[Tactic[None]]:
         return await self.handle_local_request(LocalRequestTacticMessage(msg=msg))
+
+    async def tactic_ltac(self, tactic: str) -> Internal[Tactic[None]]:
+        return await self.handle_local_request(LocalRequestTacticLtac(tactic=tactic))
 
 
 async def handle_websocket(websocket: WebSocket, get_tactic: Callable[[Handler], Coroutine[None, None, Internal[Tactic[None]]]]) -> None:
