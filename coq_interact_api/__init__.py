@@ -2,6 +2,8 @@ from __future__ import annotations
 from typing import Any, Literal, Self, Type, cast
 from collections.abc import Callable, Coroutine
 from pydantic import BaseModel, ConfigDict, model_validator, ValidationInfo, ValidatorFunctionWrapHandler, model_serializer, TypeAdapter
+import json
+import traceback
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 type InternalId = int
@@ -106,6 +108,10 @@ class RemoteRequestGetTactic(RemoteRequestBase[Internal[Tactic[None]]]):
 type RemoteRequest = RemoteRequestApplyFunction[object, object] | RemoteRequestGetTactic
 
 
+class LocalException(Exception):
+    pass
+
+
 class Handler:
     async def handle_local_request[R: BaseModel](self, _local_request: LocalRequestBase[R]) -> R:
         raise NotImplementedError()
@@ -144,29 +150,36 @@ async def handle_websocket(websocket: WebSocket, get_tactic: Callable[[Handler],
                 match s:
                     case _ if s.startswith("-> "):
                         t = s.removeprefix("-> ")
-                        remote_request: RemoteRequest = TypeAdapter(RemoteRequest).validate_json(t)
-                        result = await self.handle_remote_request(remote_request)
-                        await websocket.send_text("<- " + result.model_dump_json())
+                        await self.handle_remote(t)
                         return await aux()
                     case _ if s.startswith("<- "):
                         t = s.removeprefix("<- ")
                         return local_request.result_type().model_validate_json(t)
+                    case _ if s.startswith("!! "):
+                        t = s.removeprefix("!! ")
+                        raise LocalException(json.loads(t))
                     case _:
                         raise TypeError("Invalid message: " + s)
 
             return await aux()
+        
+        async def handle_remote(self, t: str) -> None:
+            try:
+                remote_request: RemoteRequest = TypeAdapter(RemoteRequest).validate_json(t)
+                result = await self.handle_remote_request(remote_request)
+                await websocket.send_text("<- " + result.model_dump_json())
+            except Exception:
+                await websocket.send_text("!! " + json.dumps(traceback.format_exc()))
 
     handler = HandlerImpl()
 
     while True:
         try:
             s = await websocket.receive_text()
-            assert s.startswith("-> ")
-            t = s.removeprefix("-> ")
-            remote_request: RemoteRequest = TypeAdapter(RemoteRequest).validate_json(t)
-            result = await handler.handle_remote_request(remote_request)
-            await websocket.send_text("<- " + result.model_dump_json())
         except WebSocketDisconnect:
-            pass
+            break
+        assert s.startswith("-> ")
+        t = s.removeprefix("-> ")
+        await handler.handle_remote(t)
 
     await websocket.close()
