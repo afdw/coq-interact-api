@@ -219,6 +219,12 @@ class LocalRequestTacticOr[A](LocalRequestBase[Internal[Tactic[A]]]):
     tac_2: Annotated[Internal[Tactic[A]], SkipValidation]
 
 
+class LocalRequestTacticComplete[A](LocalRequestBase[Internal[Tactic[A]]]):
+    type: Literal["LocalRequestTacticComplete"] = "LocalRequestTacticComplete"
+    _result_type: Type[object] = Internal[Tactic[object]]
+    tac: Annotated[Internal[Tactic[A]], SkipValidation]
+
+
 class LocalRequestTacticGoals(LocalRequestBase[Internal[Tactic[list[Goal]]]]):
     type: Literal["LocalRequestTacticGoals"] = "LocalRequestTacticGoals"
     _result_type: Type[object] = Internal[Tactic[Internal[list[Goal]]]]
@@ -248,6 +254,7 @@ type LocalRequest = (
     | LocalRequestTacticBind[object, object]
     | LocalRequestTacticThen[object]
     | LocalRequestTacticOr[object]
+    | LocalRequestTacticComplete[object]
     | LocalRequestTacticGoals
     | LocalRequestTacticDispatch[object]
     | LocalRequestTacticMessage
@@ -342,6 +349,15 @@ class Handler:
     async def tactic_or[A](self, tac_1: Internal[Tactic[A]], tac_2: Internal[Tactic[A]]) -> Internal[Tactic[A]]:
         return await self.handle_local_request(LocalRequestTacticOr(tac_1=tac_1, tac_2=tac_2))
 
+    async def tactic_or_list[A](self, tacs: Iterable[Internal[Tactic[A]]]) -> Internal[Tactic[A]]:
+        tac_result: Internal[Tactic[A]] = await self.tactic_fail(RuntimeError("No tactic"))
+        for tac in reversed(list(tacs)):
+            tac_result = await self.tactic_or(tac, tac_result)
+        return tac_result
+
+    async def tactic_complete[A](self, tac: Internal[Tactic[A]]) -> Internal[Tactic[A]]:
+        return await self.handle_local_request(LocalRequestTacticComplete(tac=tac))
+
     async def tactic_goals(self) -> Internal[Tactic[list[Goal]]]:
         return await self.handle_local_request(LocalRequestTacticGoals())
 
@@ -353,12 +369,6 @@ class Handler:
             return await self.tactic_dispatch([await tac(goal) for goal in goals])
 
         return await self.tactic_bind(TypeDescList(element_type_desc=TypeDescGoal()), await self.tactic_goals(), k)
-
-    async def tactic_or_list[A](self, tacs: Iterable[Internal[Tactic[A]]]) -> Internal[Tactic[A]]:
-        tac_result: Internal[Tactic[A]] = await self.tactic_fail(RuntimeError("No tactic"))
-        for tac in reversed(list(tacs)):
-            tac_result = await self.tactic_or(tac, tac_result)
-        return tac_result
 
     async def tactic_message(self, msg: str) -> Internal[Tactic[None]]:
         return await self.handle_local_request(LocalRequestTacticMessage(msg=msg))
